@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Copy, Pencil, Trash2, Plus, Search, Check, X, Tag, PackageOpen, Save, Upload, Download } from 'lucide-react';
+import { Copy, Pencil, Trash2, Plus, Search, Check, X, Tag, PackageOpen, Save, Upload, Download, AlertTriangle } from 'lucide-react';
 import Papa from 'papaparse';
 
 // Claude Artifacts環境の window.storage の代わりに、
@@ -103,6 +103,18 @@ function fullItemNo(category, itemNo) {
   return `${typeCode(category)}${itemNo || ''}`;
 }
 
+// タイトルには種類コード(to/bt/ac)を含めない、品番のみの接頭辞
+function titlePrefix(itemNo, brand) {
+  return `${itemNo || ''} ${brand || ''}`.trim();
+}
+
+// タイトル内の全角スペースは半角に統一する（全角スペース禁止）
+function toHalfWidthSpaces(str) {
+  return (str || '').replace(/\u3000/g, ' ');
+}
+
+const TITLE_MAX_LENGTH = 40;
+
 const CSV_HEADERS = ['種類', '品番', 'ブランド', '色', 'サイズ表記', '価格', 'タイトル', '着丈', '身幅', '肩幅', '袖丈', 'ウエスト', 'ウエスト最大', 'わたり幅', '股上', '股下', 'ヒップ'];
 const MEASURE_KEY_MAP = [
   ['着丈', 'kitake'],
@@ -196,7 +208,9 @@ export default function App() {
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
   const [copiedKey, setCopiedKey] = useState(null);
   const [measureVisible, setMeasureVisible] = useState({ 'トップス': true, 'パンツ': true, 'スカート': true, 'アクセサリー': true });
-  const [csvMessage, setCsvMessage] = useState('');
+  const [csvMessage, setCsvMessage] = useState(null);
+  const [formError, setFormError] = useState('');
+  const [inlineError, setInlineError] = useState('');
   const csvInputRef = useRef(null);
 
   useEffect(() => {
@@ -254,11 +268,12 @@ export default function App() {
 
     let added = 0;
     let skipped = 0;
+    const overLength = [];
     const newItems = [];
 
     (parsed.data || []).forEach((row, idx) => {
       const category = CATEGORIES.find((c) => c === String(row['種類'] || '').trim());
-      const itemNo = String(row['品番'] || '').trim().replace(/^(to|bt)/i, '').replace(/[^0-9]/g, '');
+      const itemNo = String(row['品番'] || '').trim().replace(/^(to|bt|ac)/i, '').replace(/[^0-9]/g, '');
       const brand = String(row['ブランド'] || '').trim();
       if (!category || !itemNo || !brand) {
         skipped++;
@@ -269,9 +284,12 @@ export default function App() {
         const v = String(row[header] || '').trim().replace(/[^0-9.]/g, '');
         if (v) measurements[key] = v;
       });
-      const prefix = `${fullItemNo(category, itemNo)} ${brand}`.trim();
-      const rawTitle = String(row['タイトル'] || '').trim();
-      const title = prefix ? (rawTitle ? `${prefix} ${rawTitle}` : prefix) : rawTitle;
+      const prefix = titlePrefix(itemNo, brand);
+      const rawTitle = toHalfWidthSpaces(String(row['タイトル'] || '').trim());
+      const title = toHalfWidthSpaces(prefix ? (rawTitle ? `${prefix} ${rawTitle}` : prefix) : rawTitle);
+      if (title.length > TITLE_MAX_LENGTH) {
+        overLength.push(fullItemNo(category, itemNo));
+      }
       newItems.push({
         id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7) + idx,
         category,
@@ -292,12 +310,8 @@ export default function App() {
     if (newItems.length > 0) {
       await persist([...newItems, ...items]);
     }
-    setCsvMessage(
-      added > 0
-        ? `${added}件を登録しました。${skipped > 0 ? `（${skipped}件はスキップ：種類・品番・ブランドのいずれかが未入力または不正です）` : ''}`
-        : `登録できる行がありませんでした。種類（トップス/パンツ/スカート）・品番・ブランドを確認してください。`
-    );
-    setTimeout(() => setCsvMessage(''), 6000);
+    setCsvMessage({ added, skipped, overLength });
+    setTimeout(() => setCsvMessage(null), 9000);
     e.target.value = '';
   }
 
@@ -317,31 +331,21 @@ export default function App() {
   }
 
   function handleCategoryChange(cat) {
-    setForm((prev) => {
-      const next = { ...prev, category: cat, measurements: {} };
-      if (prev.autoPrefix) {
-        const newPrefix = `${fullItemNo(cat, next.itemNo)} ${next.brand}`.trim();
-        let body = prev.title;
-        if (prev.appliedPrefix && body.startsWith(prev.appliedPrefix)) {
-          body = body.slice(prev.appliedPrefix.length).replace(/^\s+/, '');
-        }
-        next.title = newPrefix ? (body ? `${newPrefix} ${body}` : newPrefix) : body;
-        next.appliedPrefix = newPrefix;
-      }
-      return next;
-    });
+    setForm((prev) => ({ ...prev, category: cat, measurements: {} }));
   }
 
   function handleField(key, value) {
     setForm((prev) => {
-      const next = { ...prev, [key]: value };
+      let v = value;
+      if (key === 'title') v = toHalfWidthSpaces(v);
+      const next = { ...prev, [key]: v };
       if ((key === 'itemNo' || key === 'brand') && prev.autoPrefix) {
-        const newPrefix = `${fullItemNo(next.category, next.itemNo)} ${next.brand}`.trim();
+        const newPrefix = titlePrefix(next.itemNo, next.brand);
         let body = prev.title;
         if (prev.appliedPrefix && body.startsWith(prev.appliedPrefix)) {
           body = body.slice(prev.appliedPrefix.length).replace(/^\s+/, '');
         }
-        next.title = newPrefix ? (body ? `${newPrefix} ${body}` : newPrefix) : body;
+        next.title = toHalfWidthSpaces(newPrefix ? (body ? `${newPrefix} ${body}` : newPrefix) : body);
         next.appliedPrefix = newPrefix;
       }
       return next;
@@ -361,14 +365,15 @@ export default function App() {
         }
         return { ...prev, autoPrefix: false, title: body, appliedPrefix: '' };
       }
-      const newPrefix = `${fullItemNo(prev.category, prev.itemNo)} ${prev.brand}`.trim();
-      const title = newPrefix ? (prev.title ? `${newPrefix} ${prev.title}` : newPrefix) : prev.title;
+      const newPrefix = titlePrefix(prev.itemNo, prev.brand);
+      const title = toHalfWidthSpaces(newPrefix ? (prev.title ? `${newPrefix} ${prev.title}` : newPrefix) : prev.title);
       return { ...prev, autoPrefix: true, title, appliedPrefix: newPrefix };
     });
   }
 
   function startInlineEdit(entry) {
     setInlineEditId(entry.id);
+    setInlineError('');
     setInlineForm({
       category: entry.category,
       itemNo: entry.itemNo,
@@ -383,10 +388,13 @@ export default function App() {
 
   function cancelInlineEdit() {
     setInlineEditId(null);
+    setInlineError('');
   }
 
   function handleInlineField(key, value) {
-    setInlineForm((prev) => ({ ...prev, [key]: value }));
+    const v = key === 'title' ? toHalfWidthSpaces(value) : value;
+    setInlineForm((prev) => ({ ...prev, [key]: v }));
+    if (key === 'title') setInlineError('');
   }
 
   function handleInlineMeasure(key, value) {
@@ -399,15 +407,25 @@ export default function App() {
 
   function saveInlineEdit(id) {
     if (!inlineForm.itemNo.trim() || !inlineForm.brand.trim()) return;
+    if (inlineForm.title.length > TITLE_MAX_LENGTH) {
+      setInlineError(`タイトルが${TITLE_MAX_LENGTH}文字を超えています（現在${inlineForm.title.length}文字）。修正してください。`);
+      return;
+    }
     const original = items.find((i) => i.id === id);
     const updated = { ...inlineForm, id, createdAt: original ? original.createdAt : Date.now() };
     persist(items.map((i) => (i.id === id ? updated : i)));
     setInlineEditId(null);
+    setInlineError('');
   }
 
   function handleSubmit(e) {
     e.preventDefault();
     if (!form.itemNo.trim() || !form.brand.trim()) return;
+    if (form.title.length > TITLE_MAX_LENGTH) {
+      setFormError(`タイトルが${TITLE_MAX_LENGTH}文字を超えています（現在${form.title.length}文字）。修正してください。`);
+      return;
+    }
+    setFormError('');
     const newEntry = { ...form, id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7), createdAt: Date.now() };
     persist([newEntry, ...items]);
     setForm(emptyForm(form.category));
@@ -642,12 +660,22 @@ export default function App() {
             </button>
             <textarea
               value={form.title}
-              onChange={(e) => handleField('title', e.target.value)}
-              placeholder="to4589 ガリャルダガランテ リブニット Vネック 長袖 ブラウン シンプル"
+              onChange={(e) => { handleField('title', e.target.value); setFormError(''); }}
+              placeholder="4589 ガリャルダガランテ リブニット Vネック 長袖 ブラウン シンプル"
               rows={2}
               className="w-full px-3 py-2 rounded-lg text-sm outline-none resize-none"
-              style={{ border: `1px solid ${COLORS.line}` }}
+              style={{ border: `1px solid ${form.title.length > TITLE_MAX_LENGTH ? COLORS.danger : COLORS.line}` }}
             />
+            <div className="flex items-center justify-between mt-1">
+              <span className="text-xs" style={{ color: form.title.length > TITLE_MAX_LENGTH ? COLORS.danger : COLORS.inkSoft }}>
+                {form.title.length} / {TITLE_MAX_LENGTH}文字{form.title.length > TITLE_MAX_LENGTH ? '（超過しています）' : ''}
+              </span>
+            </div>
+            {formError && (
+              <div className="flex items-center gap-1.5 text-xs mt-1" style={{ color: COLORS.danger }}>
+                <AlertTriangle size={13} /> {formError}
+              </div>
+            )}
           </div>
 
           {/* 詳細プレビュー */}
@@ -704,8 +732,40 @@ export default function App() {
           </div>
 
           {csvMessage && (
-            <div className="text-xs mb-3 px-3 py-2 rounded-lg" style={{ background: COLORS.pineSoft, color: COLORS.pine }}>
-              {csvMessage}
+            <div
+              className="text-xs mb-3 px-3 py-2.5 rounded-lg"
+              style={
+                csvMessage.added === 0
+                  ? { background: COLORS.roseSoft, color: COLORS.danger, border: `1px solid ${COLORS.danger}` }
+                  : csvMessage.skipped > 0 || csvMessage.overLength.length > 0
+                  ? { background: '#FBF3E4', color: COLORS.mustard, border: `1px solid ${COLORS.mustard}` }
+                  : { background: COLORS.pineSoft, color: COLORS.pine }
+              }
+            >
+              {csvMessage.added === 0 ? (
+                <div className="flex items-start gap-1.5">
+                  <AlertTriangle size={14} className="flex-shrink-0 mt-0.5" />
+                  <span>登録できる行がありませんでした。種類（トップス/パンツ/スカート/アクセサリー）・品番・ブランドが入力されているか確認してください。</span>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-1">
+                  <div>{csvMessage.added}件を登録しました。</div>
+                  {csvMessage.skipped > 0 && (
+                    <div className="flex items-start gap-1.5">
+                      <AlertTriangle size={14} className="flex-shrink-0 mt-0.5" />
+                      <span>{csvMessage.skipped}件はスキップしました（種類・品番・ブランドのいずれかが未入力または不正です）。</span>
+                    </div>
+                  )}
+                  {csvMessage.overLength.length > 0 && (
+                    <div className="flex items-start gap-1.5">
+                      <AlertTriangle size={14} className="flex-shrink-0 mt-0.5" />
+                      <span>
+                        {csvMessage.overLength.length}件はタイトルが{TITLE_MAX_LENGTH}文字を超えています（{csvMessage.overLength.join('、')}）。登録はされていますが、一覧から編集して修正してください。
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
@@ -835,8 +895,16 @@ export default function App() {
                             onChange={(e) => handleInlineField('title', e.target.value)}
                             rows={2}
                             className="w-full px-2.5 py-1.5 rounded-lg text-sm outline-none resize-none"
-                            style={{ border: `1px solid ${COLORS.line}` }}
+                            style={{ border: `1px solid ${inlineForm.title.length > TITLE_MAX_LENGTH ? COLORS.danger : COLORS.line}` }}
                           />
+                          <div className="text-xs mt-1" style={{ color: inlineForm.title.length > TITLE_MAX_LENGTH ? COLORS.danger : COLORS.inkSoft }}>
+                            {inlineForm.title.length} / {TITLE_MAX_LENGTH}文字{inlineForm.title.length > TITLE_MAX_LENGTH ? '（超過しています）' : ''}
+                          </div>
+                          {inlineError && (
+                            <div className="flex items-center gap-1.5 text-xs mt-1" style={{ color: COLORS.danger }}>
+                              <AlertTriangle size={13} /> {inlineError}
+                            </div>
+                          )}
                         </div>
 
                         <div className="flex gap-2">
@@ -870,6 +938,11 @@ export default function App() {
                           </span>
                           <span className="serif text-sm font-bold flex-1 min-w-[120px]" style={{ color: COLORS.ink }}>{entry.brand}</span>
                           <span className="text-xs" style={{ color: COLORS.inkSoft }}>{entry.color}{entry.size ? ` / ${entry.size}` : ''}</span>
+                          {(entry.title || '').length > TITLE_MAX_LENGTH && (
+                            <span className="text-xs font-semibold px-2 py-0.5 rounded-full flex items-center gap-1" style={{ background: COLORS.roseSoft, color: COLORS.danger }}>
+                              <AlertTriangle size={11} /> {TITLE_MAX_LENGTH}文字超過
+                            </span>
+                          )}
                           <span className="mono-num text-sm font-bold" style={{ color: COLORS.mustard }}>
                             {entry.price ? `¥${Number(entry.price).toLocaleString('ja-JP')}` : '—'}
                           </span>
