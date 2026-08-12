@@ -43,13 +43,19 @@ const COLORS = {
   plum: '#6B4E71',
   plumSoft: '#EFE7EE',
   danger: '#A9524E',
+  orange: '#D9A055',
+  orangeSoft: '#F6EEDF',
+  blue: '#4682B4',
+  blueSoft: '#E8F0F6',
+  red: '#B8404A',
+  redSoft: '#F3E2E2',
 };
 
 const CATEGORY_CONFIG = {
   'トップス': {
     code: 'to',
-    accent: COLORS.pine,
-    soft: COLORS.pineSoft,
+    accent: COLORS.orange,
+    soft: COLORS.orangeSoft,
     fields: [
       { key: 'kitake', label: '着丈' },
       { key: 'mihaba', label: '身幅' },
@@ -59,8 +65,8 @@ const CATEGORY_CONFIG = {
   },
   'パンツ': {
     code: 'bt',
-    accent: COLORS.denim,
-    soft: COLORS.denimSoft,
+    accent: COLORS.blue,
+    soft: COLORS.blueSoft,
     fields: [
       { key: 'waist', label: 'ウエスト' },
       { key: 'waistMax', label: 'ウエスト最大' },
@@ -71,8 +77,8 @@ const CATEGORY_CONFIG = {
   },
   'スカート': {
     code: 'bt',
-    accent: COLORS.rose,
-    soft: COLORS.roseSoft,
+    accent: COLORS.blue,
+    soft: COLORS.blueSoft,
     fields: [
       { key: 'kitake', label: '丈' },
       { key: 'waist', label: 'ウエスト' },
@@ -82,8 +88,8 @@ const CATEGORY_CONFIG = {
   },
   'アクセサリー': {
     code: 'ac',
-    accent: COLORS.plum,
-    soft: COLORS.plumSoft,
+    accent: COLORS.red,
+    soft: COLORS.redSoft,
     fields: [
       { key: 'kitake', label: '着丈' },
       { key: 'mihaba', label: '身幅' },
@@ -129,17 +135,20 @@ const MEASURE_KEY_MAP = [
   ['ヒップ', 'hip'],
 ];
 
-function entryToCsvRow(entry) {
-  const m = entry.measurements || {};
+// CSVエクスポート専用の列（種類コード・番号・品番・販売価格・ブランド・色・サイズ・タイトル・詳細）
+const CSV_EXPORT_HEADERS = ['種類', '番号', '品番', '販売価格', 'ブランド', '色', 'サイズ', 'タイトル', '詳細'];
+
+function entryToExportRow(entry) {
   return [
-    entry.category,
+    typeCode(entry.category),
     entry.itemNo,
+    fullItemNo(entry.category, entry.itemNo),
+    entry.price,
     entry.brand,
     entry.color,
     entry.size,
-    entry.price,
     entry.title,
-    ...MEASURE_KEY_MAP.map(([, key]) => m[key] || ''),
+    generateDetail(entry),
   ];
 }
 
@@ -326,7 +335,7 @@ export default function App() {
   }
 
   function handleExportCsv() {
-    const csv = Papa.unparse({ fields: CSV_HEADERS, data: items.map(entryToCsvRow) });
+    const csv = Papa.unparse({ fields: CSV_EXPORT_HEADERS, data: items.map(entryToExportRow) });
     downloadTextFile('出品ドラフト_一覧.csv', csv);
   }
 
@@ -529,7 +538,7 @@ export default function App() {
           className="lg:w-96 w-full flex-shrink-0 rounded-2xl p-6"
           style={{ background: COLORS.surface, border: `1px solid ${COLORS.line}` }}
         >
-          <h2 className="serif text-lg font-bold mb-4" style={{ color: activeCfg.accent }}>
+          <h2 className="serif text-lg font-bold mb-4" style={{ color: COLORS.inkSoft }}>
             新しい商品を追加
           </h2>
 
@@ -623,7 +632,7 @@ export default function App() {
           {/* 採寸 */}
           <div className="mb-4 pt-3" style={{ borderTop: `1px solid ${COLORS.lineSoft}` }}>
             <div className="flex items-center justify-between mb-2">
-              <div className="text-xs font-semibold" style={{ color: activeCfg.accent }}>実寸平置き（cm）・{form.category}</div>
+              <div className="text-xs font-semibold" style={{ color: COLORS.inkSoft }}>実寸平置き（cm）・{form.category}</div>
               <label className="flex items-center gap-1.5 text-xs cursor-pointer select-none" style={{ color: COLORS.inkSoft }}>
                 <input
                   type="checkbox"
@@ -655,7 +664,7 @@ export default function App() {
           {/* タイトル */}
           <div className="mb-3">
             <label className="text-xs font-medium block mb-1" style={{ color: COLORS.inkSoft }}>タイトル</label>
-            <button type="button" onClick={toggleAutoPrefix} className="block text-xs underline mb-1 text-left" style={{ color: activeCfg.accent }}>
+            <button type="button" onClick={toggleAutoPrefix} className="block text-xs underline mb-1 text-left" style={{ color: COLORS.inkSoft }}>
               {form.autoPrefix ? '品番＋ブランドを含めない' : '品番＋ブランドを挿入する'}
             </button>
             <textarea
@@ -872,7 +881,7 @@ export default function App() {
                         </div>
 
                         <div className="mb-2">
-                          <div className="text-xs font-semibold mb-1" style={{ color: inlineCfg.accent }}>実寸平置き（cm）</div>
+                          <div className="text-xs font-semibold mb-1" style={{ color: COLORS.inkSoft }}>実寸平置き（cm）</div>
                           <div className="grid grid-cols-2 gap-2">
                             {inlineCfg.fields.map((f) => (
                               <div key={f.key}>
