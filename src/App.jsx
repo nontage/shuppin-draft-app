@@ -152,6 +152,13 @@ function entryToExportRow(entry) {
   ];
 }
 
+// CSV2：自動出品貼り付け用CSVの列（商品名・商品説明・価格・フォルダ名）
+const CSV_EXPORT2_HEADERS = ['商品名', '商品説明', '価格', 'フォルダ名'];
+
+function entryToExport2Row(entry) {
+  return [entry.title, generateDetail(entry), entry.price, fullItemNo(entry.category, entry.itemNo)];
+}
+
 function downloadTextFile(filename, content) {
   const blob = new Blob(['\uFEFF' + content], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
@@ -336,7 +343,12 @@ export default function App() {
 
   function handleExportCsv() {
     const csv = Papa.unparse({ fields: CSV_EXPORT_HEADERS, data: items.map(entryToExportRow) });
-    downloadTextFile('出品ドラフト_一覧.csv', csv);
+    downloadTextFile('下書き貼り付け用CSV.csv', csv);
+  }
+
+  function handleExportCsv2() {
+    const csv = Papa.unparse({ fields: CSV_EXPORT2_HEADERS, data: items.map(entryToExport2Row) });
+    downloadTextFile('自動出品貼り付け用CSV.csv', csv);
   }
 
   function handleCategoryChange(cat) {
@@ -736,7 +748,15 @@ export default function App() {
               className="flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg"
               style={{ border: `1px solid ${COLORS.line}`, color: COLORS.inkSoft, background: COLORS.surface }}
             >
-              <Download size={14} /> CSVエクスポート
+              <Download size={14} /> 下書き貼り付け用CSV
+            </button>
+            <button
+              type="button"
+              onClick={handleExportCsv2}
+              className="flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg"
+              style={{ border: `1px solid ${COLORS.line}`, color: COLORS.inkSoft, background: COLORS.surface }}
+            >
+              <Download size={14} /> 自動出品貼り付け用CSV
             </button>
           </div>
 
