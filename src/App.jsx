@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Copy, Pencil, Trash2, Plus, Search, Check, X, Tag, PackageOpen, Save, Upload, Download, AlertTriangle } from 'lucide-react';
+import { Copy, Pencil, Trash2, Plus, Search, Check, X, Tag, PackageOpen, Save, Upload, Download, AlertTriangle, Archive, RotateCcw } from 'lucide-react';
 import Papa from 'papaparse';
 
 // Claude Artifacts環境の window.storage の代わりに、
@@ -208,7 +208,6 @@ function generateDetail(entry) {
     lines.push('', '【実寸平置き（cm）】', ...measureLines);
   }
 
-  lines.push('', '※');
   return lines.join('\n');
 }
 
@@ -222,6 +221,8 @@ export default function App() {
   const [query, setQuery] = useState('');
   const [expandedId, setExpandedId] = useState(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+  const [view, setView] = useState('active');
+  const [selectedIds, setSelectedIds] = useState(new Set());
   const [copiedKey, setCopiedKey] = useState(null);
   const [measureVisible, setMeasureVisible] = useState({ 'トップス': true, 'パンツ': true, 'スカート': true, 'アクセサリー': true });
   const [csvMessage, setCsvMessage] = useState(null);
@@ -318,6 +319,7 @@ export default function App() {
         measurements,
         autoPrefix: title.startsWith(prefix),
         appliedPrefix: title.startsWith(prefix) ? prefix : '',
+        archived: false,
         createdAt: Date.now(),
       });
       added++;
@@ -342,12 +344,12 @@ export default function App() {
   }
 
   function handleExportCsv() {
-    const csv = Papa.unparse({ fields: CSV_EXPORT_HEADERS, data: items.map(entryToExportRow) });
+    const csv = Papa.unparse({ fields: CSV_EXPORT_HEADERS, data: items.filter((i) => !i.archived).map(entryToExportRow) });
     downloadTextFile('下書き貼り付け用CSV.csv', csv);
   }
 
   function handleExportCsv2() {
-    const csv = Papa.unparse({ fields: CSV_EXPORT2_HEADERS, data: items.map(entryToExport2Row) });
+    const csv = Papa.unparse({ fields: CSV_EXPORT2_HEADERS, data: items.filter((i) => !i.archived).map(entryToExport2Row) });
     downloadTextFile('自動出品貼り付け用CSV.csv', csv);
   }
 
@@ -433,7 +435,7 @@ export default function App() {
       return;
     }
     const original = items.find((i) => i.id === id);
-    const updated = { ...inlineForm, id, createdAt: original ? original.createdAt : Date.now() };
+    const updated = { ...inlineForm, id, archived: original ? !!original.archived : false, createdAt: original ? original.createdAt : Date.now() };
     persist(items.map((i) => (i.id === id ? updated : i)));
     setInlineEditId(null);
     setInlineError('');
@@ -447,7 +449,7 @@ export default function App() {
       return;
     }
     setFormError('');
-    const newEntry = { ...form, id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7), createdAt: Date.now() };
+    const newEntry = { ...form, id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7), archived: false, createdAt: Date.now() };
     persist([newEntry, ...items]);
     setForm(emptyForm(form.category));
   }
@@ -459,7 +461,32 @@ export default function App() {
   function confirmDelete(id) {
     persist(items.filter((i) => i.id !== id));
     if (inlineEditId === id) setInlineEditId(null);
+    setSelectedIds((prev) => {
+      if (!prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
     setConfirmDeleteId(null);
+  }
+
+  function toggleSelect(id) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function archiveSelected() {
+    if (selectedIds.size === 0) return;
+    persist(items.map((i) => (selectedIds.has(i.id) ? { ...i, archived: true } : i)));
+    setSelectedIds(new Set());
+  }
+
+  function restoreItem(id) {
+    persist(items.map((i) => (i.id === id ? { ...i, archived: false } : i)));
   }
 
   async function copyText(text, key) {
@@ -472,13 +499,17 @@ export default function App() {
     setTimeout(() => setCopiedKey(null), 1600);
   }
 
-  const filtered = items.filter((i) => {
+  const activeItems = items.filter((i) => !i.archived);
+  const archivedItems = items.filter((i) => i.archived);
+  const baseList = view === 'archive' ? archivedItems : activeItems;
+
+  const filtered = baseList.filter((i) => {
     if (!query.trim()) return true;
     const hay = [i.itemNo, fullItemNo(i.category, i.itemNo), i.brand, i.color, i.title, i.category].join(' ').toLowerCase();
     return hay.includes(query.toLowerCase());
   });
 
-  const totalPrice = items.reduce((sum, i) => sum + (Number(i.price) || 0), 0);
+  const totalPrice = activeItems.reduce((sum, i) => sum + (Number(i.price) || 0), 0);
   const activeCfg = CATEGORY_CONFIG[form.category];
   const previewDetail = generateDetail(form);
 
@@ -528,7 +559,7 @@ export default function App() {
         <div className="flex gap-6 sm:text-right">
           <div>
             <div className="text-xs" style={{ color: COLORS.inkSoft }}>登録件数</div>
-            <div className="mono-num text-2xl font-bold" style={{ color: COLORS.ink }}>{items.length}</div>
+            <div className="mono-num text-2xl font-bold" style={{ color: COLORS.ink }}>{activeItems.length}</div>
           </div>
           <div>
             <div className="text-xs" style={{ color: COLORS.inkSoft }}>合計金額</div>
@@ -724,41 +755,73 @@ export default function App() {
 
         {/* List */}
         <div className="flex-1 w-full">
-          <div className="flex flex-wrap gap-2 mb-3">
-            <input type="file" accept=".csv" ref={csvInputRef} onChange={handleCsvFile} style={{ display: 'none' }} />
+          <div className="flex gap-2 mb-3">
             <button
               type="button"
-              onClick={handleCsvImportClick}
-              className="flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-lg text-white"
-              style={{ background: COLORS.pine }}
+              onClick={() => setView('active')}
+              className="flex-1 text-sm font-semibold py-2 rounded-lg transition-colors"
+              style={view === 'active' ? { background: COLORS.ink, color: '#fff' } : { background: COLORS.surface, color: COLORS.inkSoft, border: `1px solid ${COLORS.line}` }}
             >
-              <Upload size={14} /> CSVで一括登録
+              アクティブ（{activeItems.length}）
             </button>
             <button
               type="button"
-              onClick={handleDownloadTemplate}
-              className="flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg"
-              style={{ border: `1px solid ${COLORS.line}`, color: COLORS.inkSoft, background: COLORS.surface }}
+              onClick={() => setView('archive')}
+              className="flex-1 text-sm font-semibold py-2 rounded-lg transition-colors"
+              style={view === 'archive' ? { background: COLORS.ink, color: '#fff' } : { background: COLORS.surface, color: COLORS.inkSoft, border: `1px solid ${COLORS.line}` }}
             >
-              <Download size={14} /> テンプレートDL
-            </button>
-            <button
-              type="button"
-              onClick={handleExportCsv}
-              className="flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg"
-              style={{ border: `1px solid ${COLORS.line}`, color: COLORS.inkSoft, background: COLORS.surface }}
-            >
-              <Download size={14} /> 下書き貼り付け用CSV
-            </button>
-            <button
-              type="button"
-              onClick={handleExportCsv2}
-              className="flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg"
-              style={{ border: `1px solid ${COLORS.line}`, color: COLORS.inkSoft, background: COLORS.surface }}
-            >
-              <Download size={14} /> 自動出品貼り付け用CSV
+              <Archive size={14} className="inline mr-1 -mt-0.5" />
+              アーカイブ（{archivedItems.length}）
             </button>
           </div>
+
+          {view === 'active' && (
+            <div className="flex flex-wrap gap-2 mb-3">
+              <input type="file" accept=".csv" ref={csvInputRef} onChange={handleCsvFile} style={{ display: 'none' }} />
+              <button
+                type="button"
+                onClick={handleCsvImportClick}
+                className="flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-lg text-white"
+                style={{ background: COLORS.pine }}
+              >
+                <Upload size={14} /> CSVで一括登録
+              </button>
+              <button
+                type="button"
+                onClick={handleDownloadTemplate}
+                className="flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg"
+                style={{ border: `1px solid ${COLORS.line}`, color: COLORS.inkSoft, background: COLORS.surface }}
+              >
+                <Download size={14} /> テンプレートDL
+              </button>
+              <button
+                type="button"
+                onClick={handleExportCsv}
+                className="flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg"
+                style={{ border: `1px solid ${COLORS.line}`, color: COLORS.inkSoft, background: COLORS.surface }}
+              >
+                <Download size={14} /> 下書き貼り付け用CSV
+              </button>
+              <button
+                type="button"
+                onClick={handleExportCsv2}
+                className="flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg"
+                style={{ border: `1px solid ${COLORS.line}`, color: COLORS.inkSoft, background: COLORS.surface }}
+              >
+                <Download size={14} /> 自動出品貼り付け用CSV
+              </button>
+              {selectedIds.size > 0 && (
+                <button
+                  type="button"
+                  onClick={archiveSelected}
+                  className="flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-lg text-white"
+                  style={{ background: COLORS.mustard }}
+                >
+                  <Archive size={14} /> 選択した{selectedIds.size}件をアーカイブ
+                </button>
+              )}
+            </div>
+          )}
 
           {csvMessage && (
             <div
@@ -815,7 +878,11 @@ export default function App() {
             <div className="rounded-2xl py-16 flex flex-col items-center gap-2" style={{ background: COLORS.surface, border: `1px dashed ${COLORS.line}` }}>
               <PackageOpen size={28} style={{ color: COLORS.inkSoft }} />
               <div className="text-sm" style={{ color: COLORS.inkSoft }}>
-                {items.length === 0 ? 'まだ商品が登録されていません。左のフォームから追加してください。' : '該当する商品が見つかりません。'}
+                {baseList.length === 0
+                  ? view === 'archive'
+                    ? 'アーカイブされた商品はまだありません。'
+                    : 'まだ商品が登録されていません。左のフォームから追加してください。'
+                  : '該当する商品が見つかりません。'}
               </div>
             </div>
           ) : (
@@ -961,6 +1028,15 @@ export default function App() {
                           className="flex items-center gap-3 px-4 py-3 cursor-pointer flex-wrap"
                           onClick={() => setExpandedId(isOpen ? null : entry.id)}
                         >
+                          {view === 'active' && (
+                            <input
+                              type="checkbox"
+                              checked={selectedIds.has(entry.id)}
+                              onChange={() => toggleSelect(entry.id)}
+                              onClick={(e) => e.stopPropagation()}
+                              className="flex-shrink-0 w-4 h-4"
+                            />
+                          )}
                           <span className="tag-badge" style={{ color: cfg.accent }}>{entry.itemNo ? fullItemNo(entry.category, entry.itemNo) : '—'}</span>
                           <span className="text-xs font-semibold px-2 py-0.5 rounded-full" style={{ background: cfg.soft, color: cfg.accent }}>
                             {entry.category}
@@ -976,9 +1052,15 @@ export default function App() {
                             {entry.price ? `¥${Number(entry.price).toLocaleString('ja-JP')}` : '—'}
                           </span>
                           <div className="flex items-center gap-1 ml-auto" onClick={(e) => e.stopPropagation()}>
-                            <button onClick={() => startInlineEdit(entry)} className="p-1.5 rounded-md hover:opacity-70" style={{ color: COLORS.inkSoft }} title="編集">
-                              <Pencil size={15} />
-                            </button>
+                            {view === 'active' ? (
+                              <button onClick={() => startInlineEdit(entry)} className="p-1.5 rounded-md hover:opacity-70" style={{ color: COLORS.inkSoft }} title="編集">
+                                <Pencil size={15} />
+                              </button>
+                            ) : (
+                              <button onClick={() => restoreItem(entry.id)} className="flex items-center gap-1 text-xs font-medium px-2 py-1.5 rounded-md hover:opacity-70" style={{ color: COLORS.inkSoft }} title="アーカイブから戻す">
+                                <RotateCcw size={14} /> 戻す
+                              </button>
+                            )}
                             {confirmDeleteId === entry.id ? (
                               <>
                                 <button onClick={() => confirmDelete(entry.id)} className="text-xs font-semibold px-2 py-1 rounded-md text-white" style={{ background: COLORS.danger }}>
