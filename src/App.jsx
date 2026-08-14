@@ -223,6 +223,7 @@ export default function App() {
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
   const [view, setView] = useState('active');
   const [selectedIds, setSelectedIds] = useState(new Set());
+  const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false);
   const [copiedKey, setCopiedKey] = useState(null);
   const [measureVisible, setMeasureVisible] = useState({ 'トップス': true, 'パンツ': true, 'スカート': true, 'アクセサリー': true });
   const [csvMessage, setCsvMessage] = useState(null);
@@ -479,10 +480,41 @@ export default function App() {
     });
   }
 
+  function toggleSelectAll() {
+    const allSelected = filtered.length > 0 && filtered.every((i) => selectedIds.has(i.id));
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      filtered.forEach((i) => (allSelected ? next.delete(i.id) : next.add(i.id)));
+      return next;
+    });
+  }
+
+  function switchView(v) {
+    setView(v);
+    setSelectedIds(new Set());
+    setBulkDeleteConfirm(false);
+  }
+
   function archiveSelected() {
     if (selectedIds.size === 0) return;
     persist(items.map((i) => (selectedIds.has(i.id) ? { ...i, archived: true } : i)));
     setSelectedIds(new Set());
+  }
+
+  function requestBulkDelete() {
+    if (selectedIds.size === 0) return;
+    setBulkDeleteConfirm(true);
+  }
+
+  function confirmBulkDelete() {
+    persist(items.filter((i) => !selectedIds.has(i.id)));
+    if (inlineEditId && selectedIds.has(inlineEditId)) setInlineEditId(null);
+    setSelectedIds(new Set());
+    setBulkDeleteConfirm(false);
+  }
+
+  function cancelBulkDelete() {
+    setBulkDeleteConfirm(false);
   }
 
   function restoreItem(id) {
@@ -516,31 +548,17 @@ export default function App() {
   return (
     <div style={{ background: COLORS.bg, minHeight: '100%', color: COLORS.ink, fontFamily: "'Noto Sans JP', sans-serif" }} className="p-6 lg:p-10">
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Shippori+Mincho:wght@500;700;800&family=Noto+Sans+JP:wght@400;500;700&display=swap');
-        .serif { font-family: 'Shippori Mincho', serif; }
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&display=swap');
+        .serif { font-family: 'Noto Sans JP', sans-serif; }
         .mono-num { font-variant-numeric: tabular-nums; letter-spacing: 0.02em; }
-        .tag-badge {
-          position: relative;
+        .item-badge {
           display: inline-flex;
           align-items: center;
-          padding: 3px 12px 3px 18px;
-          border: 1.5px dashed currentColor;
-          border-radius: 3px 10px 10px 3px;
-          font-family: 'Shippori Mincho', serif;
+          padding: 3px 9px;
+          border-radius: 6px;
+          font-family: 'Noto Sans JP', sans-serif;
           font-weight: 700;
           font-size: 13px;
-        }
-        .tag-badge::before {
-          content: '';
-          position: absolute;
-          left: 6px;
-          top: 50%;
-          transform: translateY(-50%);
-          width: 5px;
-          height: 5px;
-          border-radius: 50%;
-          background: ${COLORS.bg};
-          border: 1.5px solid currentColor;
         }
         textarea, input, select { font-family: 'Noto Sans JP', sans-serif; }
         ::placeholder { color: #A7AFA6; }
@@ -758,7 +776,7 @@ export default function App() {
           <div className="flex gap-2 mb-3">
             <button
               type="button"
-              onClick={() => setView('active')}
+              onClick={() => switchView('active')}
               className="flex-1 text-sm font-semibold py-2 rounded-lg transition-colors"
               style={view === 'active' ? { background: COLORS.ink, color: '#fff' } : { background: COLORS.surface, color: COLORS.inkSoft, border: `1px solid ${COLORS.line}` }}
             >
@@ -766,7 +784,7 @@ export default function App() {
             </button>
             <button
               type="button"
-              onClick={() => setView('archive')}
+              onClick={() => switchView('archive')}
               className="flex-1 text-sm font-semibold py-2 rounded-lg transition-colors"
               style={view === 'archive' ? { background: COLORS.ink, color: '#fff' } : { background: COLORS.surface, color: COLORS.inkSoft, border: `1px solid ${COLORS.line}` }}
             >
@@ -810,15 +828,65 @@ export default function App() {
               >
                 <Download size={14} /> 自動出品貼り付け用CSV
               </button>
+            </div>
+          )}
+
+          {filtered.length > 0 && (
+            <div className="flex items-center flex-wrap gap-3 mb-3 px-1">
+              <label className="flex items-center gap-1.5 text-xs cursor-pointer select-none" style={{ color: COLORS.inkSoft }}>
+                <input
+                  type="checkbox"
+                  checked={filtered.length > 0 && filtered.every((i) => selectedIds.has(i.id))}
+                  onChange={toggleSelectAll}
+                  className="w-4 h-4"
+                />
+                すべて選択
+              </label>
               {selectedIds.size > 0 && (
-                <button
-                  type="button"
-                  onClick={archiveSelected}
-                  className="flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-lg text-white"
-                  style={{ background: COLORS.mustard }}
-                >
-                  <Archive size={14} /> 選択した{selectedIds.size}件をアーカイブ
-                </button>
+                <>
+                  <span className="text-xs" style={{ color: COLORS.inkSoft }}>{selectedIds.size}件選択中</span>
+                  <div className="flex items-center gap-2 ml-auto">
+                    {view === 'active' && (
+                      <button
+                        type="button"
+                        onClick={archiveSelected}
+                        className="flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-lg text-white"
+                        style={{ background: COLORS.mustard }}
+                      >
+                        <Archive size={14} /> アーカイブ
+                      </button>
+                    )}
+                    {bulkDeleteConfirm ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={confirmBulkDelete}
+                          className="text-xs font-semibold px-3 py-2 rounded-lg text-white"
+                          style={{ background: COLORS.danger }}
+                        >
+                          本当に削除する（{selectedIds.size}件）
+                        </button>
+                        <button
+                          type="button"
+                          onClick={cancelBulkDelete}
+                          className="px-3 py-2 rounded-lg text-xs font-medium"
+                          style={{ border: `1px solid ${COLORS.line}`, color: COLORS.inkSoft }}
+                        >
+                          キャンセル
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={requestBulkDelete}
+                        className="flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-lg text-white"
+                        style={{ background: COLORS.danger }}
+                      >
+                        <Trash2 size={14} /> 削除
+                      </button>
+                    )}
+                  </div>
+                </>
               )}
             </div>
           )}
@@ -886,7 +954,7 @@ export default function App() {
               </div>
             </div>
           ) : (
-            <div className="flex flex-col gap-3">
+            <div className="flex flex-col gap-2">
               {filtered.map((entry) => {
                 const cfg = CATEGORY_CONFIG[entry.category] || CATEGORY_CONFIG['トップス'];
                 const isOpen = expandedId === entry.id;
@@ -1025,19 +1093,17 @@ export default function App() {
                     ) : (
                       <>
                         <div
-                          className="flex items-center gap-3 px-4 py-3 cursor-pointer flex-wrap"
+                          className="flex items-center gap-3 px-4 py-2 cursor-pointer flex-wrap"
                           onClick={() => setExpandedId(isOpen ? null : entry.id)}
                         >
-                          {view === 'active' && (
-                            <input
-                              type="checkbox"
-                              checked={selectedIds.has(entry.id)}
-                              onChange={() => toggleSelect(entry.id)}
-                              onClick={(e) => e.stopPropagation()}
-                              className="flex-shrink-0 w-4 h-4"
-                            />
-                          )}
-                          <span className="tag-badge" style={{ color: cfg.accent }}>{entry.itemNo ? fullItemNo(entry.category, entry.itemNo) : '—'}</span>
+                          <input
+                            type="checkbox"
+                            checked={selectedIds.has(entry.id)}
+                            onChange={() => toggleSelect(entry.id)}
+                            onClick={(e) => e.stopPropagation()}
+                            className="flex-shrink-0 w-4 h-4"
+                          />
+                          <span className="item-badge" style={{ background: cfg.soft, color: cfg.accent }}>{entry.itemNo ? fullItemNo(entry.category, entry.itemNo) : '—'}</span>
                           <span className="text-xs font-semibold px-2 py-0.5 rounded-full" style={{ background: cfg.soft, color: cfg.accent }}>
                             {entry.category}
                           </span>
