@@ -121,6 +121,21 @@ function toHalfWidthSpaces(str) {
 
 const TITLE_MAX_LENGTH = 40;
 
+// カタカナ→ひらがな変換（ひらがな・カタカナ・英字を区別せず予測できるように）
+function toHiragana(str) {
+  return String(str || '').replace(/[\u30a1-\u30f6]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0x60));
+}
+
+function normalizeBrandText(str) {
+  return toHiragana(str).toLowerCase().trim();
+}
+
+function matchBrandCandidates(query, candidates) {
+  const q = normalizeBrandText(query);
+  if (!q) return [];
+  return candidates.filter((c) => c && normalizeBrandText(c).includes(q) && normalizeBrandText(c) !== q).slice(0, 8);
+}
+
 const CSV_HEADERS = ['種類', '品番', 'ブランド', '色', 'サイズ表記', '価格', 'タイトル', '着丈', '身幅', '肩幅', '袖丈', 'ウエスト', 'ウエスト最大', 'わたり幅', '股上', '股下', 'ヒップ'];
 const MEASURE_KEY_MAP = [
   ['着丈', 'kitake'],
@@ -224,6 +239,11 @@ export default function App() {
   const [view, setView] = useState('active');
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false);
+  const [brandList, setBrandList] = useState([]);
+  const [brandSuggestOpen, setBrandSuggestOpen] = useState(false);
+  const [inlineBrandSuggestOpen, setInlineBrandSuggestOpen] = useState(false);
+  const [brandManagerOpen, setBrandManagerOpen] = useState(false);
+  const [brandManagerText, setBrandManagerText] = useState('');
   const [copiedKey, setCopiedKey] = useState(null);
   const [measureVisible, setMeasureVisible] = useState({ 'トップス': true, 'パンツ': true, 'スカート': true, 'アクセサリー': true });
   const [csvMessage, setCsvMessage] = useState(null);
@@ -245,9 +265,44 @@ export default function App() {
       } catch (e) {
         // 初回は未設定
       }
+      try {
+        const res3 = await storage.get('brandList');
+        if (res3 && res3.value) setBrandList(JSON.parse(res3.value));
+      } catch (e) {
+        // 初回は未設定
+      }
       setLoaded(true);
     })();
   }, []);
+
+  function saveBrandList(next) {
+    setBrandList(next);
+    (async () => {
+      try {
+        await storage.set('brandList', JSON.stringify(next));
+      } catch (e) {
+        // 保存できなくても候補表示は有効のまま
+      }
+    })();
+  }
+
+  function openBrandManager() {
+    setBrandManagerText(brandList.join('\n'));
+    setBrandManagerOpen(true);
+  }
+
+  function saveBrandManager() {
+    const next = Array.from(
+      new Set(
+        brandManagerText
+          .split('\n')
+          .map((s) => s.trim())
+          .filter(Boolean)
+      )
+    );
+    saveBrandList(next);
+    setBrandManagerOpen(false);
+  }
 
   function toggleMeasureVisible(cat) {
     setMeasureVisible((prev) => {
@@ -532,6 +587,9 @@ export default function App() {
   }
 
   const activeItems = items.filter((i) => !i.archived);
+  const allBrandCandidates = Array.from(new Set([...brandList, ...items.map((i) => i.brand).filter(Boolean)]));
+  const brandMatches = matchBrandCandidates(form.brand, allBrandCandidates);
+  const inlineBrandMatches = inlineForm ? matchBrandCandidates(inlineForm.brand, allBrandCandidates) : [];
   const archivedItems = items.filter((i) => i.archived);
   const baseList = view === 'archive' ? archivedItems : activeItems;
 
@@ -657,16 +715,63 @@ export default function App() {
                 style={{ border: `1px solid ${COLORS.line}` }}
               />
             </div>
-            <div className="col-span-2">
-              <label className="text-xs font-medium block mb-1" style={{ color: COLORS.inkSoft }}>ブランド</label>
+            <div className="col-span-2 relative">
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-xs font-medium" style={{ color: COLORS.inkSoft }}>ブランド</label>
+                <button type="button" onClick={openBrandManager} className="text-xs underline" style={{ color: COLORS.inkSoft }}>
+                  候補を管理
+                </button>
+              </div>
               <input
                 value={form.brand}
-                onChange={(e) => handleField('brand', e.target.value)}
+                onChange={(e) => { handleField('brand', e.target.value); setBrandSuggestOpen(true); }}
+                onFocus={() => setBrandSuggestOpen(true)}
+                onBlur={() => setTimeout(() => setBrandSuggestOpen(false), 150)}
                 placeholder="GALLARDAGALANTE ガリャルダガランテ"
                 className="w-full px-3 py-2 rounded-lg text-sm outline-none"
                 style={{ border: `1px solid ${COLORS.line}` }}
+                autoComplete="off"
                 required
               />
+              {brandSuggestOpen && brandMatches.length > 0 && (
+                <div
+                  className="absolute z-10 left-0 right-0 mt-1 rounded-lg overflow-hidden shadow-lg"
+                  style={{ background: COLORS.surface, border: `1px solid ${COLORS.line}` }}
+                >
+                  {brandMatches.map((b) => (
+                    <button
+                      type="button"
+                      key={b}
+                      onClick={() => { handleField('brand', b); setBrandSuggestOpen(false); }}
+                      className="w-full text-left px-3 py-2 text-sm hover:opacity-70"
+                      style={{ color: COLORS.ink, background: COLORS.surface }}
+                    >
+                      {b}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {brandManagerOpen && (
+                <div className="absolute z-20 left-0 right-0 mt-1 p-3 rounded-lg shadow-lg" style={{ background: COLORS.surface, border: `1px solid ${COLORS.line}` }}>
+                  <div className="text-xs mb-1.5" style={{ color: COLORS.inkSoft }}>ブランド候補を1行に1つ入力（予測変換に使われます）</div>
+                  <textarea
+                    value={brandManagerText}
+                    onChange={(e) => setBrandManagerText(e.target.value)}
+                    rows={6}
+                    className="w-full px-2.5 py-2 rounded-lg text-sm outline-none resize-none"
+                    style={{ border: `1px solid ${COLORS.line}` }}
+                    placeholder={'GALLARDAGALANTE ガリャルダガランテ\nLeilian レリアン'}
+                  />
+                  <div className="flex gap-2 mt-2">
+                    <button type="button" onClick={saveBrandManager} className="text-xs font-semibold px-3 py-1.5 rounded-lg text-white" style={{ background: activeCfg.accent }}>
+                      保存する
+                    </button>
+                    <button type="button" onClick={() => setBrandManagerOpen(false)} className="text-xs font-medium px-3 py-1.5 rounded-lg" style={{ border: `1px solid ${COLORS.line}`, color: COLORS.inkSoft }}>
+                      閉じる
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
             <div className="col-span-1">
               <label className="text-xs font-medium block mb-1" style={{ color: COLORS.inkSoft }}>色</label>
@@ -1006,14 +1111,35 @@ export default function App() {
                               style={{ border: `1px solid ${COLORS.line}` }}
                             />
                           </div>
-                          <div className="col-span-2">
+                          <div className="col-span-2 relative">
                             <label className="text-xs block mb-1" style={{ color: COLORS.inkSoft }}>ブランド</label>
                             <input
                               value={inlineForm.brand}
-                              onChange={(e) => handleInlineField('brand', e.target.value)}
+                              onChange={(e) => { handleInlineField('brand', e.target.value); setInlineBrandSuggestOpen(true); }}
+                              onFocus={() => setInlineBrandSuggestOpen(true)}
+                              onBlur={() => setTimeout(() => setInlineBrandSuggestOpen(false), 150)}
                               className="w-full px-2.5 py-1.5 rounded-lg text-sm outline-none"
                               style={{ border: `1px solid ${COLORS.line}` }}
+                              autoComplete="off"
                             />
+                            {inlineBrandSuggestOpen && inlineBrandMatches.length > 0 && (
+                              <div
+                                className="absolute z-10 left-0 right-0 mt-1 rounded-lg overflow-hidden shadow-lg"
+                                style={{ background: COLORS.surface, border: `1px solid ${COLORS.line}` }}
+                              >
+                                {inlineBrandMatches.map((b) => (
+                                  <button
+                                    type="button"
+                                    key={b}
+                                    onClick={() => { handleInlineField('brand', b); setInlineBrandSuggestOpen(false); }}
+                                    className="w-full text-left px-3 py-1.5 text-sm hover:opacity-70"
+                                    style={{ color: COLORS.ink, background: COLORS.surface }}
+                                  >
+                                    {b}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
                           </div>
                           <div>
                             <label className="text-xs block mb-1" style={{ color: COLORS.inkSoft }}>色</label>
